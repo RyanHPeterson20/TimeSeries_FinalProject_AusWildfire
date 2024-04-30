@@ -1,0 +1,432 @@
+---
+title: "Exploratory Models"
+author: "Ryan Peterson"
+date: "2024-04-18"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r library}
+#for data/date manipulating
+suppressMessages(library(lubridate))
+suppressMessages(library(tidyverse))
+suppressMessages(library(reshape2)) #matrix long format
+
+#for linear modeling 
+suppressMessages(library(glmnet)) #lasso/reg
+suppressMessages(library(MuMIn)) #dredge/variable select
+
+#for time series
+suppressMessages(library(forecast)) #regression with ARIMA error
+suppressMessages(library(TSA)) #transfer function
+suppressMessages(library(vars)) #vector autoregression
+
+#other tools
+suppressMessages(library(parallel)) #running parallel
+```
+
+
+```{r imported_functions}
+#lag_function (requires tidyverse, lubridate)
+setwd("~/CO_AUS/Aus_CO-main")
+source("lag_function.R")
+```
+
+
+```{r data}
+setwd("~/CO_AUS/Aus_CO-main")
+
+#anomaly only response with week data
+response_anoms <- read.csv("Data/response_anoms.csv", header = TRUE, stringsAsFactors = FALSE)
+
+#predictors with week data
+predictor_anoms <- read.csv("Data/predictor_anoms.csv", header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+
+```{r additional_cleaning}
+#TODO: potentially create a function for date bounding
+#cleaning data for time series work
+week <- 1
+
+response <- response_anoms
+predictor <- predictor_anoms
+
+resp_dates <- as_date(response[response$week == week, ]$time)
+pred_dates <- as_date(predictor[predictor$week == week, ]$time)
+
+#get minimum prediction date from response data
+low_bound <- pred_dates[which(pred_dates == min(resp_dates)) - 1]
+#get maximum response date from predictor data
+upper_bound <- max(as_date(predictor$time)) + days(7)
+
+#this requires week being set correctly above, that req should be fixed
+bounded_pred_df <- predictor[predictor$time >= low_bound & predictor$time <= upper_bound, ]
+
+bounded_resp_df <- response[response$time <= upper_bound, ]#temporarily changed so that each week has the same number of years
+
+rm(response, predictor, low_bound, upper_bound, 
+   week, resp_dates, pred_dates)
+
+#outputs to check the boundary dates are correct
+min(bounded_pred_df$time)
+min(bounded_resp_df$time)
+
+max(bounded_pred_df$time)
+max(bounded_resp_df$time)
+```
+
+```{r season_partitions}
+season_weeks <- c(35:52, 1:14)
+
+#break above into 4 8-week groups
+#early season weeks 35-42
+early <- c(35:42)
+#early-mid 43-50
+early_mid <- c(43:50)
+#early-late 52-6
+late_mid <- c(51:52, 1:6)
+#late 6-14
+late <- c(7:14)
+```
+
+
+Exploratory Modeling
+- Goal of this is to produce a full initial model that can be iterated over. In addition, this model will be used for GMAC 2024. 
+
+Notes:
+(Create detailed notes here on my methodology.)
+
+1. Simple Linear Models
+
+  a. Variable Selection via Correlation Coefficients
+
+2. VARMA Model
+
+  a. 
+
+3. 
+
+---------------------------------------------
+
+Questions:
+- Do we need to stabilize the variance first?
+-- Note: Since we are working with anomoly data we can consider this data de-trended. 
+- Can we use some Bayesian method?
+- Which "ARIMAX" model should we use?
+- Do we want to use any ANOVA for the linear model?
+- What is the correlation between some of the predictors (DMI, TSA, AAO) and Nino?
+-- Is there a significant enough relationship to replace these with Nino. 
+
+Variable Selection Notes
+- Try a dredge method (MuMIn) for selection at first. 
+
+Potential Modeling Options:
+- Using SARMA (or similar models) with 'Identity' functions for specific response periods. That is, we identify functions specific for a given response period that is
+$f_i(t) = 1 \text{ if } t \in \text{period } i, \text{ or }0 \text{ otherwise}.$
+- Use Linear Transfer Function Models (ARMAX, and others) to connect residuals to an ARMA model. 
+-- In a dynamic regression model we can write $y_t \beta_0 + \beta_1 x_{1,t} + ... + \beta_k x_{k,t} + \eta_t$, where $\eta_t^T = \phi_1 \eta_{t-1}^T + \epsilon_t$ is an AR(1) error. 
+-- Check to see if the residuals "look" like a time series (some sort of ARIMA model), basically see if we can identify anything not picked up by the "primary" model. 
+- Regression part of the model will need some kind of regularization due to multi-colinearity.
+
+Validation Notes
+- Use re-sampling to check our models.
+- Residual analysis, modified according to our modeling method of choice. 
+
+
+# Visualize Response Time Series
+
+-get absolute response values over a single year
+-use to find a pattern/seasonality
+-stack abs of all years onto a single plot
+
+Data Cleaning Note:
+
+- If there is a week 53, we average that with week 52 and assign that to week 52
+- Normalize the response data, $\frac{x_i - \mu}{\sigma}$.
+
+```{r vis_prep}
+#check on boundaries of full dataset
+min(response_anoms$time)
+max(response_anoms$time)
+#note: begin in start of 2001 goes to end of 2021 (from above)
+
+response <- response_anoms
+
+#additional cleaning/set_up
+response <- response[ ,-1]
+
+week_53 <- which(response$week == 53, )
+for (k in week_53) {
+  response[k-1, 2] <- mean(c(response[k-1, 2], response[k, 2]))
+}
+rm(k)
+
+response <- response[-week_53, ]
+
+#TODO: average week 53 with week 52 and assign to week 52
+
+names(response) <- c("time", "NE Aus", "SE Aus", "week", "year")
+
+y2_lab_vals <- c("Absolute Anomaly CO",
+                "Absolute Anomaly CO")
+
+resp_nams <- names(response)
+
+#normalizing for both values
+for (i in 2:3) {
+  response[,i] <- (response[,i] - mean(response[,i]))/ sd(response[,i])
+}
+rm(i)
+
+#updated absolute data
+abs_response <- response
+abs_response[ ,2] <- abs(abs_response[ ,2])
+abs_response[ ,3] <- abs(abs_response[ ,3])
+
+
+#TODO: reorg the data to create a fire season weeks 35-52 thenn 1-14, that is:
+season_weeks <- c(35:52, 1:14)
+#for both response and abs_response
+```
+
+```{r vis_response}
+
+
+#add in time bound for overall (maybe remove)
+first_date <- min(abs_response$time)
+last_date <- max(abs_response$time)
+
+time <- abs_response$time
+time_range <- c(first_date, last_date)
+
+#TODO: if they provide our vertical dotted lines (see: response_ts.png) then change them to identify the fire season.
+x_ticks <- seq(year(time_range[1]), year(time_range[2]), by = 1) #can also be done with lubridate floor
+#x_ticks ##check above
+x_ticks <- ymd(paste0(x_ticks, "01", "01"))
+#x_ticks ##check above
+
+#if above time ranges not needed change this: (or just delete)
+#rm(first_date, last_date, time, time_range, x_ticks)
+
+#current set-up for weeks
+first_week <- min(abs_response$week)
+last_week <- max(abs_response$week)
+week_range <- c(first_week, last_week)
+
+#remove these if they aren't needed later
+#rm(first_week, last_week, ...)
+
+```
+
+
+Below is too messy to discern a pattern
+- Next steps: fit a spline to the data to identify seasonality/partition trends.
+
+```{r plot_test}
+#plot testing, delete when done
+#testing ne aus [,2] (e.g. column 2)
+
+full_resp <- abs_response[ ,2]
+temp_week <- 1:52
+temp_years <- unique(abs_response$year)
+temp_years <- temp_years[-1]
+
+y_tick_max <- max(round(range(full_resp)))
+y.tick.max.lab <- y_tick_max / 2
+y.tick <- c(0, y_tick_max)
+y.tick.labs <- c(0, y.tick.max.lab, y_tick_max)
+
+this_resp <- abs_response[abs_response$year == 2001, 2] #bring inside loop
+
+plot(temp_week, this_resp, col = "black", pch = 16, 
+     xaxt = "n", xlab = "",
+     yaxt = "n", ylab = y.tick.labs[2], col.lab = "black",  
+     ylim = range(y.tick), bty = "n", cex.lab = 1.25,  xpd = NA)
+for (i in temp_years) {
+  temp_resp <- abs_response[abs_response$year == i, 2]
+  points(temp_week, temp_resp, col = "black", pch = 16)
+}
+
+#repeat for se aus [,3]
+
+full_resp <- abs_response[ ,3]
+temp_week <- 1:52
+temp_years <- unique(abs_response$year)
+temp_years <- temp_years[-1]
+
+y_tick_max <- max(round(range(full_resp)))
+y.tick.max.lab <- y_tick_max / 2
+y.tick <- c(0, y_tick_max)
+y.tick.labs <- c(0, y.tick.max.lab, y_tick_max)
+
+this_resp <- abs_response[abs_response$year == 2001, 3] #bring inside loop
+
+plot(temp_week, this_resp, col = "black", pch = 16, 
+     xaxt = "n", xlab = "",
+     yaxt = "n", ylab = y.tick.labs[2], col.lab = "black",  
+     ylim = range(y.tick), bty = "n", cex.lab = 1.25,  xpd = NA)
+for (i in temp_years) {
+  temp_resp <- abs_response[abs_response$year == i, 3]
+  points(temp_week, temp_resp, col = "black", pch = 16)
+}
+
+#add back in with adjustments (maybe)
+#       ylim = range(y.ticks), bty = "n", cex.lab = 1.25,  xpd = NA)
+```
+
+
+# 1. Simple Linear Models
+
+Exploring simple linear models lm(), gls(), (using AIC/BIC)
+
+## a. Variable Selection via Correlation Coefficients
+
+Select predictors via their Pearson Correlation Coefficient. 
+
+Note: bring in some of the work from `CO_fixedLag.Rmd` for lag correlation work
+
+Steps:
+1. Find the top 30 highest correlated lagged predictors for a given partition (early, early-mid, etc)
+2. Select combinations of these lagged predictors to create a model for each week in that partition. 
+.
+.
+.
+n - p. As we select models with fewer predictors we can add in predictors with lower correlation. Repeat until all predictors are considered.
+n - p + 1. Begin validation work (other than AIC/BIC)
+
+
+
+```{r test_model_bycorr}
+#assuming correlation values from other r files.
+
+load("lag_early_correlation.rda") #from 'CO_fixedLag.rda
+
+abs_lag_early_df <- abs(lagCorr_early_df)
+NE_lag_early_df <- abs_lag_early_df[ ,1:4]
+SE_lag_early_df <- abs_lag_early_df[ ,5:8]
+
+#get location of max 30
+NE_early <- as.matrix(NE_lag_early_df)
+melt_NE_early <- melt(NE_early)
+names(melt_NE_early) <- c("Row", "Column", "Value")
+
+top_NE <- melt_NE_early[order(melt_NE_early$Value, decreasing = TRUE), ][1:15, ]
+
+print(top_NE)
+
+#repeat for SE
+SE_early <- as.matrix(SE_lag_early_df)
+melt_SE_early <- melt(SE_early)
+names(melt_SE_early) <- c("Row", "Column", "Value")
+
+top_SE <- melt_SE_early[order(melt_SE_early$Value, decreasing = TRUE), ][1:15, ]
+
+print(top_SE)
+```
+
+```{r data_prep}
+#create data frame of predictor
+#TODO: turn into a function with above block. 
+
+#run test on weeks in early group
+week <- early[1]
+week_35 <- lag_function(week, bounded_resp_df, bounded_pred_df)
+
+resp_ne <- week_35$NE_Aus_anomaly_co
+resp_se <- week_35$SE_Aus_anomaly_co
+
+#change below to max 30 abs(correlation)
+
+#select for top 30 abs(corr) 
+pred_NEearly_df <- data.frame(temp = rep(1, 19))
+n <- length(top_NE[,1])
+for (i in 1:n ){
+  temp_lag <- top_NE[i, 1]
+  temp_pred <- as.character(top_NE[i, 2])
+  col_name <- paste0(substring(temp_pred, 4), ".anomaly_lag_", temp_lag)
+  temp_col <- week_35[col_name]
+  pred_NEearly_df <- cbind(pred_NEearly_df, temp_col)
+  #names(pred_NEearly_df[,i]) <- col_name
+}
+
+pred_NEearly_df <- pred_NEearly_df[,-1]
+
+#pred_SEearly_df
+pred_SEearly_df <- data.frame(temp = rep(1, 19))
+n <- length(top_SE[,1])
+for (i in 1:n ){
+  temp_lag <- top_SE[i, 1]
+  temp_pred <- as.character(top_SE[i, 2])
+  col_name <- paste0(substring(temp_pred, 4), ".anomaly_lag_", temp_lag)
+  temp_col <- week_35[col_name]
+  pred_SEearly_df <- cbind(pred_SEearly_df, temp_col)
+  #names(pred_NEearly_df[,i]) <- col_name
+}
+
+pred_SEearly_df <- pred_SEearly_df[,-1]
+
+lm_ne_35 <- lm(resp_ne ~. ,data = pred_NEearly_df)
+lm_se_35 <- lm(resp_se ~. ,data = pred_SEearly_df)
+```
+
+
+```{r test}
+#delete when done
+```
+
+Fixes for below:
+-get cluster (parallel) working otherwise this will take forever
+
+```{r dredge_ne35}
+library(tictoc)
+
+tic()
+options(na.action = "na.fail")
+d_ne35 <- dredge(lm_ne_35)
+toc()
+
+```
+
+```{r dredge_se35}
+tic()
+options(na.action = "na.fail")
+d_se35 <- dredge(lm_se_35)
+toc()
+```
+
+
+```{r parallel_dredge}
+#not working correctly
+
+detectCores()
+
+num_cores <- 8  # You can adjust this number based on your system's capabilities
+
+#altername option
+#num_cores <- detectCores() - 1
+
+# Create a cluster with multiple workers
+cluster_1 <- makeCluster(num_cores)
+
+#TODO: add in dredge with the cl var
+tic()
+options(na.action = "na.fail")
+d2_ne35 <- dredge(lm_ne_35, cluster = cluster_1)
+toc()
+
+
+# Close the cluster
+stopCluster(cl)
+```
+
+
+```{r test_lm}
+#testing in linear models
+```
+
