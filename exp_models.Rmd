@@ -301,6 +301,12 @@ n - p. As we select models with fewer predictors we can add in predictors with l
 n - p + 1. Begin validation work (other than AIC/BIC)
 
 
+For below work in model selection, we will functionalize this process so that we can iterate through various weeks
+in the wildfire season.
+Steps to include:
+1. Given a week what period is it in?
+2. Get the correlation data for all periods? (potentially pass as parameter)
+3. Find the largest (absoolute) correlation?
 
 ```{r test_model_bycorr}
 #assuming correlation values from other r files.
