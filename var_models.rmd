@@ -1,0 +1,112 @@
+---
+title: "var_models"
+author: "Ryan Peterson"
+date: "2024-05-02"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r library}
+#for data/date manipulating
+suppressMessages(library(lubridate))
+suppressMessages(library(tidyverse))
+
+#time series 
+suppressMessages(library(vars)) #vector autoregression
+```
+
+
+```{r imported_functions}
+#lag_function (requires tidyverse, lubridate)
+setwd("~/CO_AUS/Aus_CO-main")
+source("lag_function.R")
+```
+
+
+```{r data}
+setwd("~/CO_AUS/Aus_CO-main")
+
+#anomaly only response with week data
+response_anoms <- read.csv("Data/response_anoms.csv", header = TRUE, stringsAsFactors = FALSE)
+
+#predictors with week data
+predictor_anoms <- read.csv("Data/predictor_anoms.csv", header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+
+```{r data_cleaning}
+#TODO: potentially create a function for date bounding
+#cleaning data for time series work
+week <- 1
+
+response <- response_anoms
+predictor <- predictor_anoms
+
+resp_dates <- as_date(response[response$week == week, ]$time)
+pred_dates <- as_date(predictor[predictor$week == week, ]$time)
+
+#get minimum prediction date from response data
+low_bound <- pred_dates[which(pred_dates == min(resp_dates)) - 1]
+#get maximum response date from predictor data
+upper_bound <- max(as_date(predictor$time)) + days(7)
+
+#this requires week being set correctly above, that req should be fixed
+bounded_pred_df <- predictor[predictor$time >= low_bound & predictor$time <= upper_bound, ]
+
+bounded_resp_df <- response[response$time <= upper_bound, ]#temporarily changed so that each week has the same number of years
+
+rm(response, predictor, low_bound, upper_bound, 
+   week, resp_dates, pred_dates)
+
+#outputs to check the boundary dates are correct
+min(bounded_pred_df$time)
+min(bounded_resp_df$time)
+
+max(bounded_pred_df$time)
+max(bounded_resp_df$time)
+```
+
+
+Outline/Goals
+
+1. Build simple var model with a response region (NE/SE AUS) and a single climate mode series, with shorter range dependencies (e.g p <= 20).
+
+2.
+
+
+Notes/Comments
+- For the var() function use the season argument to identify the wildfire season along with partitions of the wildfire season.
+
+Questions:
+
+
+# 1. Var models
+
+
+Considering NE AUS and Nino
+
+```{r var_data_selection}
+#clean data a little bit more
+nino_df <- bounded_pred_df[ ,c(2,3,7,8)]
+ne_aus_df <- bounded_resp_df[ ,c(2,3,5,6)]
+
+#alter the data to align better, then we can make adjustments to this later
+min_resp <- min(ne_aus_df$time)
+max_pred <- max(nino_df$time)
+
+
+#rm(min_resp, max_pred)
+```
+
+
+```{r test_block}
+test_ts <- data(Canada)
+Canada[,1]
+```
+
+
