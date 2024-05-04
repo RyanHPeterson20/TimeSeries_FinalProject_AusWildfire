@@ -1,5 +1,5 @@
 ---
-title: "var_models"
+title: "VAR models"
 author: "Ryan Peterson"
 date: "2024-05-02"
 output: pdf_document
@@ -14,9 +14,15 @@ knitr::opts_chunk$set(echo = TRUE)
 #for data/date manipulating
 suppressMessages(library(lubridate))
 suppressMessages(library(tidyverse))
+suppressMessages(library(fields)) #test.for.zero
+
+#ts data types
+suppressMessages(library(xts))
+suppressMessages(library(zoo))
 
 #time series 
 suppressMessages(library(vars)) #vector autoregression
+suppressMessages(library(forecast)) #spectral methods
 ```
 
 
@@ -60,6 +66,8 @@ bounded_pred_df <- predictor[predictor$time >= low_bound & predictor$time <= upp
 
 bounded_resp_df <- response[response$time <= upper_bound, ]#temporarily changed so that each week has the same number of years
 
+
+
 rm(response, predictor, low_bound, upper_bound, 
    week, resp_dates, pred_dates)
 
@@ -72,7 +80,21 @@ max(bounded_resp_df$time)
 ```
 
 
-Outline/Goals
+```{r season_setup}
+season_weeks <- c(35:52, 1:14)
+
+#early season weeks 35-42
+early <- c(35:42)
+#early-mid 43-50
+early_mid <- c(43:50)
+#early-late 52-6
+late_mid <- c(51:52, 1:6)
+#late 6-14
+late <- c(7:14)
+```
+
+
+Outline/Goals:
 
 1. Build simple var model with a response region (NE/SE AUS) and a single climate mode series, with shorter range dependencies (e.g p <= 20).
 
@@ -81,32 +103,218 @@ Outline/Goals
 
 Notes/Comments
 - For the var() function use the season argument to identify the wildfire season along with partitions of the wildfire season.
+- Add in seasonality by creating another variable that has the data for that season, basically in season and out of season data.
 
 Questions:
 
 
 # 1. Var models
 
-
 Considering NE AUS and Nino
 
 ```{r var_data_selection}
+#TODO: add in se_aus
+
 #clean data a little bit more
-nino_df <- bounded_pred_df[ ,c(2,3,7,8)]
 ne_aus_df <- bounded_resp_df[ ,c(2,3,5,6)]
+nino_df <- bounded_pred_df[ ,c(2,3,7,8)]
+dmi_df <- bounded_pred_df[ ,c(2,4,7,8)]
+tsa_df <- bounded_pred_df[ ,c(2,5,7,8)]
+aao_df <- bounded_pred_df[ ,c(2,6,7,8)]
+
+#correct for week 53
+week_53 <- which(ne_aus_df$week == 53, )
+for (k in week_53) {
+  ne_aus_df[k-1, 2] <- mean(c(ne_aus_df[k-1, 2], ne_aus_df[k, 2]))
+}
+rm(k)
+ne_aus_df <- ne_aus_df[-week_53, ]
+
+
+week_53 <- which(nino_df$week == 53, )
+test.for.zero(which(tsa_df$week == 53, ), week_53)
+test.for.zero(which(dmi_df$week == 53, ), week_53)
+test.for.zero(which(aao_df$week == 53, ), week_53)
+for (j in week_53) {
+  nino_df[j-1, 2] <- mean(c(nino_df[j-1, 2], nino_df[j, 2]))
+  dmi_df[j-1, 2] <- mean(c(dmi_df[j-1, 2], dmi_df[j, 2]))
+  tsa_df[j-1, 2] <- mean(c(tsa_df[j-1, 2], tsa_df[j, 2]))
+  aao_df[j-1, 2] <- mean(c(aao_df[j-1, 2], aao_df[j, 2]))
+}
+rm(j)
+nino_df <- nino_df[-week_53, ]
+dmi_df <- dmi_df[-week_53, ]
+tsa_df <- tsa_df[-week_53, ]
+aao_df <- aao_df[-week_53, ]
 
 #alter the data to align better, then we can make adjustments to this later
-min_resp <- min(ne_aus_df$time)
-max_pred <- max(nino_df$time)
+min_pred <- min(ne_aus_df$time)
+max_resp <- max(nino_df$time)
 
+ne_aus_df <- ne_aus_df[ne_aus_df$time <= max_resp, ]
+nino_df <- nino_df[nino_df$time >= min_pred, ]
+dmi_df <- dmi_df[dmi_df$time >= min_pred, ]
+tsa_df <- tsa_df[tsa_df$time >= min_pred, ]
+aao_df <- aao_df[aao_df$time >= min_pred, ]
 
-#rm(min_resp, max_pred)
+min_date <- as.Date(min(nino_df$time))
+
+#create a df and ts-object
+dates <- ne_aus_df$time
+NE_aus_tsdf <- data.frame(Date = dates, NE_AUS = ne_aus_df$NE_Aus_anomaly_co,
+                          Nino = nino_df$nino.anomaly,
+                          dmi = dmi_df$dmi.anomaly,
+                          tsa = tsa_df$tsa.anomaly,
+                          aao = aao_df$aao.anomaly)
+
+NE_aus_zoo <- zoo(NE_aus_tsdf[, -1], order.by = NE_aus_tsdf$Date)
+
+rm(min_pred, max_resp, min_date)
 ```
 
 
+```{r just_test_it_out}
+#no seasonality
+var_select <- VARselect(NE_aus_zoo, lag.max = 52, type = "both")
+aic <- var_select$criteria[1,]
+bic <- var_select$criteria[3,]
+
+NE_model <- VAR(NE_aus_zoo, p = 3, type = "both")
+
+summary(NE_model$varresult$NE_AUS)
+
+plot(1:52, aic, type = "l", xlab = "lag")
+plot(1:52, bic, type = "l", xlab = "lag")
+```
+
+
+```{r seasonal_alt}
+#set up fire season data
+
+#TODO: create a new col of ne aus wildfire season data,
+## if the week is in season_weeks then shift over to new column
+## then change 0 in original column
+
+n <- length(ne_aus_df$NE_Aus_anomaly_co)
+#add column in 
+season_data <- rep(0, length.out = n)
+NE_aus_season <- data.frame(ne_aus_df$time, ne_aus_df$NE_Aus_anomaly_co, season_data, 
+                            ne_aus_df$week, ne_aus_df$year)
+colnames(NE_aus_season) <- c("time", "NE_Aus_anomaly_co", "NE_Aus_season_co",
+                             "week", "year")
+
+for (i in 1:n) {
+  #get week val first
+  temp_week <- NE_aus_season[i, 4]
+  if (temp_week %in% season_weeks) {
+    NE_aus_season[i, 3] <- NE_aus_season[i, 2]
+    NE_aus_season[i, 2] <- 0
+  }
+}
+
+dates <- NE_aus_season$time
+NE_aus_season_df <- data.frame(Date = dates, NE_AUS = NE_aus_season$NE_Aus_anomaly_co,
+                          NE_AUS_season = NE_aus_season$NE_Aus_season_co,
+                          Nino = nino_df$nino.anomaly,
+                          dmi = dmi_df$dmi.anomaly,
+                          tsa = tsa_df$tsa.anomaly,
+                          aao = aao_df$aao.anomaly)
+
+NE_aus_season_zoo <- zoo(NE_aus_season_df[, -1], order.by = NE_aus_season_df$Date)
+```
+
+
+```{r var_model_seasonal}
+var_select <- VARselect(NE_aus_season_zoo, lag.max = 52, type = "both")
+aic <- var_select$criteria[1,]
+bic <- var_select$criteria[3,]
+
+plot(1:52, aic, type = "l", xlab = "lag")
+plot(1:52, bic, type = "l", xlab = "lag")
+
+```
+
+
+below here is just test blocks, do note use
+
 ```{r test_block}
+#test ts set up, replace later with real variable names
+test_df <- data.frame("time" = nino_df$time, 
+                      "ne_aus" = ne_aus_df$NE_Aus_anomaly_co,
+                      "nino" = nino_df$nino.anomaly, 
+                      "week" = nino_df$week, 
+                      "year" = nino_df$year)
+test_mat <- matrix(data = c(ne_aus_df$NE_Aus_anomaly_co, nino_df$nino.anomaly),
+                   ncol = 2)
+
+colnames(test_mat) <- c("NE_Aus", "Nino")
+test_ts <- ts(data = test_mat, start = min_date, frequency = 52)
+#test_ts[,1:2]
+#print(test_ts) #TODO: get row names to line up with dates (or year + week num)
+var_test1 <- VAR(test_ts, p = 5, ic= "AIC", season = 2, type = "trend")
+#var_test1
+#summary(var_test1)
+
+Date <- seq(as.Date("2020-01-01"), by = "month", length.out = 12)
+Date_2 <- test_df$time
+
+xts_test2 <- xts(test_df, order.by =test_df$time)
+test_ts2 <- ts(coredata(xts_test2), frequency = 52)
+#test_ts2[,1:2]
+var_test2 <- VAR(xts_test2, p =5, type = "none")
+
+var_setup <- VARselect(test_ts, lag.max = 52, type = "none")
+#summary(var_setup)
+#var_setup
+
+#create time series from dfs
+#TODO: create a data matrix instead of a df since this isn't really working
+nino_df$time <- as.Date(nino_df$time)
+xts_test <- xts(nino_df[,-1], order.by = nino_df$time)
+#print(xts_test)
+ts_test <- as.ts(xts_test, start = min_date)
+
+#ts_test[,1:2]
+
+```
+
+```{r test_block}
+#generating an example of data
+set.seed(951)
+
+# Generate sample time series data
+dates <- seq(as.Date("2015-01-01"), by = "month", length.out = 60)  # 5 years of monthly data
+test_data <- seq(as.Date("2011-01-01"), by = "week", length.out = 52)
+var1 <- rnorm(60, mean = 100, sd = 10)  # Random data for variable 1
+var2 <- rnorm(60, mean = 200, sd = 15)  # Random data for variable 2
+
+# Create the data frame
+data_ts <- data.frame(Date = dates, Var1 = var1, Var2 = var2)
+
+# Adding dummy variables for each quarter
+data_ts$Q1 <- ifelse(format(dates, "%m") %in% c("01", "02", "03"), 1, 0)
+data_ts$Q2 <- ifelse(format(dates, "%m") %in% c("04", "05", "06"), 1, 0)
+data_ts$Q3 <- ifelse(format(dates, "%m") %in% c("07", "08", "09"), 1, 0)
+data_ts$Q4 <- ifelse(format(dates, "%m") %in% c("10", "11", "12"), 1, 0)
+
+# Convert again to zoo for VAR modeling
+data_ts_zoo <- zoo(data_ts[, -1], order.by = data_ts$Date)
+
+# Fit the VAR model including seasonal dummies
+var_model_with_dummies <- VAR(data_ts_zoo, p = 2, type = "both")
+summary(var_model_with_dummies)
+var_model_with_dummies
+```
+
+```{r test_case}
 test_ts <- data(Canada)
-Canada[,1]
+Canada[ ,1]
+Canada[ ,1:2]
+
+var_test <- VAR(Canada, p = 2, type = "none")
+#VAR(Canada, p = 2, type = "const")
+#VAR(Canada, p = 2, type = "trend")
+#VAR(Canada, p = 2, type = "both")
 ```
 
 
