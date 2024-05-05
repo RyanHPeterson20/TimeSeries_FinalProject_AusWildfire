@@ -23,6 +23,8 @@ suppressMessages(library(zoo))
 #time series 
 suppressMessages(library(vars)) #vector autoregression
 suppressMessages(library(forecast)) #spectral methods
+suppressMessages(library(marima)) #VARIMA
+#suppressMessages(library(MTS)) #try mts if needed
 ```
 
 
@@ -44,6 +46,7 @@ predictor_anoms <- read.csv("Data/predictor_anoms.csv", header = TRUE, stringsAs
 
 ```
 
+Temporary removal of 2019/2020 season in below code.
 
 ```{r data_cleaning}
 #TODO: potentially create a function for date bounding
@@ -104,6 +107,7 @@ Outline/Goals:
 Notes/Comments
 - For the var() function use the season argument to identify the wildfire season along with partitions of the wildfire season.
 - Add in seasonality by creating another variable that has the data for that season, basically in season and out of season data.
+- Use method from MTS to filter out non-significant parameters in a model.
 
 Questions:
 
@@ -179,14 +183,36 @@ var_select <- VARselect(NE_aus_zoo, lag.max = 52, type = "both")
 aic <- var_select$criteria[1,]
 bic <- var_select$criteria[3,]
 
-NE_model <- VAR(NE_aus_zoo, p = 3, type = "both")
+aic_test <- c()
+for (i in 1:10) {
+  NE_temp <- vars::VAR(NE_aus_zoo, p = i, type = "both")
+  NE_aus_temp <- NE_temp$varresult$NE_AUS
+  print(AIC(NE_aus_temp, k =2))
+}
+
+NE_model <- vars::VAR(NE_aus_zoo, p = 7, type = "both")
+
+NE_aus_model <- NE_model$varresult$NE_AUS
+AIC(NE_aus_model, k =2)
 
 summary(NE_model$varresult$NE_AUS)
+
+#change var names and titles below
+residuals_var <- residuals(NE_model)
+
+# Plot ACF and PACF for the first variable's residuals
+Acf(residuals_var[,1], main="ACF of Residuals for Variable 1")
+Pacf(residuals_var[,1], main="PACF of Residuals for Variable 1")
 
 plot(1:52, aic, type = "l", xlab = "lag")
 plot(1:52, bic, type = "l", xlab = "lag")
 ```
 
+
+# seasonality work 
+
+
+Rename dataframes in below chunks to reflect being the full season.
 
 ```{r seasonal_alt}
 #set up fire season data
@@ -229,8 +255,119 @@ var_select <- VARselect(NE_aus_season_zoo, lag.max = 52, type = "both")
 aic <- var_select$criteria[1,]
 bic <- var_select$criteria[3,]
 
-plot(1:52, aic, type = "l", xlab = "lag")
-plot(1:52, bic, type = "l", xlab = "lag")
+for (i in 1:10) {
+  NE_temp <- vars::VAR(NE_aus_season_zoo, p = i, type = "both")
+  NE_aus_temp <- NE_temp$varresult$NE_AUS_season
+  print(AIC(NE_aus_temp, k =2))
+}
+
+#visual of AIC says p = 7
+
+var_season <-  vars::VAR(NE_aus_season_zoo, p = 7, type = "both")
+summary(var_season$varresult$NE_AUS_season)
+summary(var_season)
+
+
+#change var names and titles below
+residuals_var <- residuals(var_season)
+
+
+# Plot ACF and PACF for the first variable's residuals
+Acf(residuals_var[,2], main="ACF of Residuals for Variable 2")
+Pacf(residuals_var[,2], main="PACF of Residuals for Variable 2")
+
+#plot(1:52, aic, type = "l", xlab = "lag")
+#plot(1:52, bic, type = "l", xlab = "lag")
+
+```
+
+
+```{r season_partition}
+#first using var models
+early_season <- rep(0, length.out = n)
+earlymid_season <- rep(0, length.out = n)
+latemid_season <- rep(0, length.out = n)
+late_season <- rep(0, length.out = n)
+NE_aus_season <- data.frame(ne_aus_df$time, ne_aus_df$NE_Aus_anomaly_co, 
+                            early_season, earlymid_season, latemid_season, late_season,
+                            ne_aus_df$week, ne_aus_df$year)
+colnames(NE_aus_season) <- c("time", "NE_Aus_anomaly_co", 
+                             "Early", "Early_Mid", "Late_Mid", "Late",
+                             "week", "year")
+
+for (i in 1:n) {
+  #get week val first
+  temp_week <- NE_aus_season[i, 7]
+  if (temp_week %in% early) {
+    NE_aus_season[i, 3] <- NE_aus_season[i, 2]
+    NE_aus_season[i, 2] <- 0
+  }
+  if (temp_week %in% early_mid) {
+    NE_aus_season[i, 4] <- NE_aus_season[i, 2]
+    NE_aus_season[i, 2] <- 0
+  }
+  if (temp_week %in% late_mid) {
+    NE_aus_season[i, 5] <- NE_aus_season[i, 2]
+    NE_aus_season[i, 2] <- 0
+  }
+  if (temp_week %in% late) {
+    NE_aus_season[i, 6] <- NE_aus_season[i, 2]
+    NE_aus_season[i, 2] <- 0
+  }
+}
+
+dates <- NE_aus_season$time
+NE_aus_season_df <- data.frame(Date = dates, NE_AUS = NE_aus_season$NE_Aus_anomaly_co,
+                          NE_Early = NE_aus_season$Early,
+                          NE_EarlyMid = NE_aus_season$Early_Mid,
+                          NE_LateMid = NE_aus_season$Late_Mid,
+                          NE_Late = NE_aus_season$Late,
+                          Nino = nino_df$nino.anomaly,
+                          dmi = dmi_df$dmi.anomaly,
+                          tsa = tsa_df$tsa.anomaly,
+                          aao = aao_df$aao.anomaly)
+
+NE_aus_season_zoo <- zoo(NE_aus_season_df[ ,-1], order.by = NE_aus_season_df$Date)
+
+NE_aus_early_zoo <- zoo(NE_aus_season_df[ ,-c(1:2,4:6)], order.by = NE_aus_season_df$Date)
+NE_aus_earlyMid_zoo <- zoo(NE_aus_season_df[ ,-c(1:3,5:6)], order.by = NE_aus_season_df$Date)
+NE_aus_lateMid_zoo <- zoo(NE_aus_season_df[ ,-c(1:4,6)], order.by = NE_aus_season_df$Date)
+NE_aus_late_zoo <- zoo(NE_aus_season_df[ ,-c(1:5)], order.by = NE_aus_season_df$Date)
+```
+
+
+```{r more_refined_VAR}
+var_check <- VARselect(NE_aus_season_zoo, lag.max = 52, type = "both")
+var_check_early <- VARselect(NE_aus_early_zoo, lag.max = 52, type = "both")
+var_check_earlyMid <- VARselect(NE_aus_earlyMid_zoo, lag.max = 52, type = "both")
+var_check_lateMid <- VARselect(NE_aus_lateMid_zoo, lag.max = 52, type = "both")
+var_check_late <- VARselect(NE_aus_late_zoo, lag.max = 52, type = "both")
+
+var_test <- vars::VAR(NE_aus_season_zoo, p = 12, type = "const")
+
+summary(var_test$varresult$NE_LateMid)
+
+var_latemid <- vars::VAR(NE_aus_lateMid_zoo, p = 2, type = "both")
+
+summary(var_latemid$varresult$NE_LateMid)
+```
+
+
+In the below test block we are going to test our VAR model with AIC/BIC but only for predicting the seasonal data.
+(and testing of our VARMA model (via library MTS))
+
+Note: the MTS::VARMA also has a refVARMA to get rid of insignificant est to 0
+
+change to marima model
+
+possible steps:
+check AIC/BIC for p, q, and threshhold values
+for increasing p anf q
+for thres 0.5, 1, 1.5 ( adjusted according;y)
+output is a pxq matrix where each entry is a tuple of AIC (or BIC) value and the thres value.
+
+```{r test_aicbic}
+
 
 ```
 
