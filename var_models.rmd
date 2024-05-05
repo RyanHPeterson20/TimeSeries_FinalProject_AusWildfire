@@ -282,6 +282,8 @@ Pacf(residuals_var[,2], main="PACF of Residuals for Variable 2")
 ```
 
 
+Ignore work below here. It is not needed at the moment.
+
 ```{r season_partition}
 #first using var models
 early_season <- rep(0, length.out = n)
