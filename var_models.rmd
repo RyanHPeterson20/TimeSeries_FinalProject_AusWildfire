@@ -14,7 +14,10 @@ knitr::opts_chunk$set(echo = TRUE)
 #for data/date manipulating
 suppressMessages(library(lubridate))
 suppressMessages(library(tidyverse))
-suppressMessages(library(fields)) #test.for.zero
+suppressMessages(library(fields)) #test.for.zero()
+
+#modeling checks
+suppressMessages(library(MASS))
 
 #ts data types
 suppressMessages(library(xts))
@@ -69,10 +72,15 @@ bounded_pred_df <- predictor[predictor$time >= low_bound & predictor$time <= upp
 
 bounded_resp_df <- response[response$time <= upper_bound, ]#temporarily changed so that each week has the same number of years
 
+#2019 boundary (week 14 2019: end of 2018/2019 season)
+max_date <- as_date(response_anoms[response_anoms$week == 14 & 
+                                     response_anoms$year == 2019, ]$time)
 
+bounded_pred_df <- bounded_pred_df[bounded_pred_df$time <= max_date, ]
+bounded_resp_df <- bounded_resp_df[bounded_resp_df$time <= max_date, ]
 
 rm(response, predictor, low_bound, upper_bound, 
-   week, resp_dates, pred_dates)
+   week, resp_dates, pred_dates, max_date)
 
 #outputs to check the boundary dates are correct
 min(bounded_pred_df$time)
@@ -80,6 +88,53 @@ min(bounded_resp_df$time)
 
 max(bounded_pred_df$time)
 max(bounded_resp_df$time)
+```
+
+Make more bounding adjusmtents, that we perfomr later on.
+That is:
+-combine week 53 to week 52
+-
+
+```{r further_df_adj}
+#var check
+temp_week_52 <- bounded_resp_df[bounded_resp_df$week == 52, ]
+var(temp_week[,3])
+var(temp_week[,4])
+
+#correct for week 53
+week_53 <- which(bounded_resp_df$week == 53, )
+for (k in week_53) {
+  bounded_resp_df[k-1, 3] <- mean(c(bounded_resp_df[k-1, 3], 
+                                    bounded_resp_df[k, 3]))
+  bounded_resp_df[k-1, 4] <- mean(c(bounded_resp_df[k-1, 4], 
+                                    bounded_resp_df[k, 4]))
+}
+rm(k)
+bounded_resp_df <- bounded_resp_df[-week_53, ]
+
+#fix for the correct columns
+for (j in week_53) {
+  bounded_pred_df[j-1, 3] <- mean(c(bounded_pred_df[j-1, 3], 
+                                    bounded_pred_df[j, 3]))
+  bounded_pred_df[j-1, 4] <- mean(c(bounded_pred_df[j-1, 4],
+                                    bounded_pred_df[j, 4]))
+  bounded_pred_df[j-1, 5] <- mean(c(bounded_pred_df[j-1, 5],
+                                    bounded_pred_df[j, 5]))
+  bounded_pred_df[j-1, 6] <- mean(c(bounded_pred_df[j-1, 6], 
+                                    bounded_pred_df[j, 6]))
+}
+rm(j)
+bounded_pred_df <- bounded_pred_df[-week_53, ]
+
+#alter the data to align better, then we can make adjustments to this later
+min_pred <- min(bounded_resp_df$time)
+max_resp <- max(bounded_pred_df$time)
+
+bounded_resp_df <- bounded_resp_df[bounded_resp_df$time <= max_resp, ]
+bounded_pred_df <- bounded_pred_df[bounded_pred_df$time >= min_pred, ]
+
+rm(min_pred, max_resp)
+
 ```
 
 
@@ -101,7 +156,13 @@ Outline/Goals:
 
 1. Build simple var model with a response region (NE/SE AUS) and a single climate mode series, with shorter range dependencies (e.g p <= 20).
 
-2.
+2. Find optimal  (via AIC/BIC) VAR model for our response time series of NE Aus and SE Aus.
+
+3. Visualizations:
+- CCF plot for each response and each predictor (total 8 figures)
+- residual plots
+- fitted curve over true data
+- maybe ACF/PACF residuals (already done, maybe include in paper/presentation.)
 
 
 Notes/Comments
@@ -110,6 +171,86 @@ Notes/Comments
 - Use method from MTS to filter out non-significant parameters in a model.
 
 Questions:
+
+
+# Time Series Checks 
+
+(variance)
+
+```{r var_adj}
+#negative adjustments
+y <- bounded_resp_df$NE_Aus_anomaly_co
+c <- if(min(y) <= 0) abs(min(y)) + 1.01 else 0
+y_pos_NEaus <- log(y + c)
+
+y <- bounded_resp_df$SE_Aus_anomaly_co
+c <- if(min(y) <= 0) abs(min(y)) + 1.01 else 0
+y_pos_SEaus <- log(y + c)
+
+#new predictor df w/ only pred values
+new_pred_df <- bounded_pred_df[ ,3:6]
+
+#fit for box cox
+fit_test  <- lm(y_pos_NEaus ~ 1, data = new_pred_df)
+
+boxcox_result <- boxcox(fit_test, lambda = seq(-3, 5, by = 0.1))
+lambda_optimal <- boxcox_result$x[which.max(boxcox_result$y)]
+
+trans_yposNEaus <- (y_pos_NEaus^lambda_optimal - 1) / lambda_optimal
+
+fit_test  <- lm(y_pos_SEaus ~ 1, data = new_pred_df)
+
+boxcox_result <- boxcox(fit_test, lambda = seq(-3, 5, by = 0.1))
+lambda_optimal <- boxcox_result$x[which.max(boxcox_result$y)]
+
+trans_yposSEaus <- (y_pos_NEaus^lambda_optimal - 1) / lambda_optimal
+
+```
+
+
+```{r DONT RUN}
+#normalizing for both values
+#for (i in 1:52) {
+#  bounded_resp_df[,i] <- (bounded_resp_df[,i] - mean(bounded_resp_df[,i]))/ sd(bounded_resp_df[,i])
+#}
+
+
+```
+
+
+```{r variance_plot}
+#plot variance wrt time
+temp_bounded_resp_df <- bounded_resp_df
+temp_bounded_resp_df$NE_Aus_anomaly_co <- trans_yposNEaus
+temp_bounded_resp_df$SE_Aus_anomaly_co <- trans_yposSEaus
+
+#variance by week
+aus_var <- as.data.frame(matrix(ncol = 3) )
+colnames(aus_var) <- c("NEaus_var", "SEaus_var", "week")
+for (i in 1:52) {
+  temp_week <- temp_bounded_resp_df[temp_bounded_resp_df$week == i, ]
+  temp_row <- c(var(temp_week[,3]), var(temp_week[,4]), i)
+  aus_var <- rbind(aus_var, temp_row)
+}
+aus_var <- aus_var[-1, ]
+
+plot(aus_var$week, aus_var$NEaus_var, type = "l")
+plot(aus_var$week, aus_var$SEaus_var, type = "l")
+```
+
+
+```{r hist}
+hist(bounded_resp_df$NE_Aus_anomaly_co, breaks = 12, col = 'steelblue', 
+     main = "NE AUS, no adj",  xlab = "NE Aus CO Anomalies") 
+hist(temp_bounded_resp_df$NE_Aus_anomaly_co, breaks = 12, col = 'steelblue',
+     main = "NE AUS, box-cox",  xlab = "NE Aus CO Anomalies")
+
+
+hist(bounded_resp_df$SE_Aus_anomaly_co, breaks = 12, col = 'steelblue',
+     main = "SE AUS, no adj.", xlab = "SE Aus CO Anomalies")
+hist(temp_bounded_resp_df$SE_Aus_anomaly_co, breaks = 12, col = 'steelblue',
+     main = "SE AUS, box-cox",  xlab = "SE Aus CO Anomalies")
+```
 
 
 # 1. Var models
@@ -125,31 +266,6 @@ nino_df <- bounded_pred_df[ ,c(2,3,7,8)]
 dmi_df <- bounded_pred_df[ ,c(2,4,7,8)]
 tsa_df <- bounded_pred_df[ ,c(2,5,7,8)]
 aao_df <- bounded_pred_df[ ,c(2,6,7,8)]
-
-#correct for week 53
-week_53 <- which(ne_aus_df$week == 53, )
-for (k in week_53) {
-  ne_aus_df[k-1, 2] <- mean(c(ne_aus_df[k-1, 2], ne_aus_df[k, 2]))
-}
-rm(k)
-ne_aus_df <- ne_aus_df[-week_53, ]
-
-
-week_53 <- which(nino_df$week == 53, )
-test.for.zero(which(tsa_df$week == 53, ), week_53)
-test.for.zero(which(dmi_df$week == 53, ), week_53)
-test.for.zero(which(aao_df$week == 53, ), week_53)
-for (j in week_53) {
-  nino_df[j-1, 2] <- mean(c(nino_df[j-1, 2], nino_df[j, 2]))
-  dmi_df[j-1, 2] <- mean(c(dmi_df[j-1, 2], dmi_df[j, 2]))
-  tsa_df[j-1, 2] <- mean(c(tsa_df[j-1, 2], tsa_df[j, 2]))
-  aao_df[j-1, 2] <- mean(c(aao_df[j-1, 2], aao_df[j, 2]))
-}
-rm(j)
-nino_df <- nino_df[-week_53, ]
-dmi_df <- dmi_df[-week_53, ]
-tsa_df <- tsa_df[-week_53, ]
-aao_df <- aao_df[-week_53, ]
 
 #alter the data to align better, then we can make adjustments to this later
 min_pred <- min(ne_aus_df$time)
@@ -190,9 +306,10 @@ for (i in 1:10) {
   print(AIC(NE_aus_temp, k =2))
 }
 
-NE_model <- vars::VAR(NE_aus_zoo, p = 7, type = "both")
+NE_model <- vars::VAR(NE_aus_zoo, p = 3, type = "both")
 
 NE_aus_model <- NE_model$varresult$NE_AUS
+
 AIC(NE_aus_model, k =2)
 
 summary(NE_model$varresult$NE_AUS)
@@ -208,9 +325,21 @@ plot(1:52, aic, type = "l", xlab = "lag")
 plot(1:52, bic, type = "l", xlab = "lag")
 ```
 
+```{r SE_aus_VAR}
+se_aus_df <- bounded_resp_df[ ,c(2,4,5,6)]
 
-# seasonality work 
+#alter the data to align better, then we can make adjustments to this later
+max_resp <- max(nino_df$time)
 
+se_aus_df <- se_aus_df[se_aus_df$time <= max_resp, ]
+
+#TODO: finish this
+```
+
+
+## a. Transformed Data
+
+# 2. Seasonal Model 
 
 Rename dataframes in below chunks to reflect being the full season.
 
@@ -237,6 +366,8 @@ for (i in 1:n) {
     NE_aus_season[i, 2] <- 0
   }
 }
+
+#TODO: check on how this affects that mean/var of week 52 data.
 
 dates <- NE_aus_season$time
 NE_aus_season_df <- data.frame(Date = dates, NE_AUS = NE_aus_season$NE_Aus_anomaly_co,
@@ -276,13 +407,12 @@ residuals_var <- residuals(var_season)
 Acf(residuals_var[,2], main="ACF of Residuals for Variable 2")
 Pacf(residuals_var[,2], main="PACF of Residuals for Variable 2")
 
+
 #plot(1:52, aic, type = "l", xlab = "lag")
 #plot(1:52, bic, type = "l", xlab = "lag")
 
 ```
 
-
-Ignore work below here. It is not needed at the moment.
 
 ```{r season_partition}
 #first using var models
@@ -353,6 +483,8 @@ var_latemid <- vars::VAR(NE_aus_lateMid_zoo, p = 2, type = "both")
 
 summary(var_latemid$varresult$NE_LateMid)
 ```
+
+# 3. Model Validations 
 
 
 In the below test block we are going to test our VAR model with AIC/BIC but only for predicting the seasonal data.
