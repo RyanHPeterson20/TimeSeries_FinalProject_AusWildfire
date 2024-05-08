@@ -98,8 +98,6 @@ That is:
 ```{r further_df_adj}
 #var check
 temp_week_52 <- bounded_resp_df[bounded_resp_df$week == 52, ]
-var(temp_week[,3])
-var(temp_week[,4])
 
 #correct for week 53
 week_53 <- which(bounded_resp_df$week == 53, )
@@ -175,6 +173,28 @@ Questions:
 
 # Time Series Checks 
 
+
+CCF models
+
+```{r}
+NEaus_ts <- ts(bounded_resp_df$NE_Aus_anomaly_co, start = as.Date(min(bounded_resp_df$time)), frequency = 52)
+SEaus_ts <- ts(bounded_resp_df$SE_Aus_anomaly_co, start = as.Date(min(bounded_resp_df$time)), frequency = 52)
+
+nino_ts <- ts(bounded_pred_df$nino.anomaly, start = as.Date(min(bounded_pred_df$time)), frequency = 52)
+dmi_ts <- ts(bounded_pred_df$dmi.anomaly, start = as.Date(min(bounded_pred_df$time)), frequency = 52)
+tsa_ts <- ts(bounded_pred_df$tsa.anomaly, start = as.Date(min(bounded_pred_df$time)), frequency = 52)
+aao_ts <- ts(bounded_pred_df$aao.anomaly, start = as.Date(min(bounded_pred_df$time)), frequency = 52)
+
+ccf(as.numeric(NEaus_ts), as.numeric(nino_ts), type = "correlation", lag = 52)
+ccf(as.numeric(SEaus_ts), as.numeric(nino_ts), type = "correlation", lag = 52)
+ccf(as.numeric(NEaus_ts), as.numeric(dmi_ts), type = "correlation", lag = 52)
+ccf(as.numeric(SEaus_ts), as.numeric(dmi_ts), type = "correlation", lag = 52)
+ccf(as.numeric(NEaus_ts), as.numeric(tsa_ts), type = "correlation", lag = 52)
+ccf(as.numeric(SEaus_ts), as.numeric(tsa_ts), type = "correlation", lag = 52)
+ccf(as.numeric(NEaus_ts), as.numeric(aao_ts), type = "correlation", lag = 52)
+ccf(as.numeric(SEaus_ts), as.numeric(aao_ts), type = "correlation", lag = 52)
+```
+
 (variance)
 
 ```{r var_adj}
@@ -193,17 +213,21 @@ new_pred_df <- bounded_pred_df[ ,3:6]
 #fit for box cox
 fit_test  <- lm(y_pos_NEaus ~ 1, data = new_pred_df)
 
-boxcox_result <- boxcox(fit_test, lambda = seq(-3, 5, by = 0.1))
+boxcox_result <- boxcox(fit_test, lambda = seq(0, 5, by = 0.1))
 lambda_optimal <- boxcox_result$x[which.max(boxcox_result$y)]
 
 trans_yposNEaus <- (y_pos_NEaus^lambda_optimal - 1) / lambda_optimal
 
 fit_test  <- lm(y_pos_SEaus ~ 1, data = new_pred_df)
 
-boxcox_result <- boxcox(fit_test, lambda = seq(-3, 5, by = 0.1))
+boxcox_result <- boxcox(fit_test, lambda = seq(0, 5, by = 0.1))
 lambda_optimal <- boxcox_result$x[which.max(boxcox_result$y)]
 
 trans_yposSEaus <- (y_pos_NEaus^lambda_optimal - 1) / lambda_optimal
+
+```
+
+```{r data_ts}
 
 ```
 
@@ -223,6 +247,14 @@ trans_yposSEaus <- (y_pos_NEaus^lambda_optimal - 1) / lambda_optimal
 temp_bounded_resp_df <- bounded_resp_df
 temp_bounded_resp_df$NE_Aus_anomaly_co <- trans_yposNEaus
 temp_bounded_resp_df$SE_Aus_anomaly_co <- trans_yposSEaus
+
+tempNEaus_ts <- ts(temp_bounded_resp_df$NE_Aus_anomaly_co, 
+               start = as.Date(min(temp_bounded_resp_df$time)), frequency = 52)
+tempSEaus_ts <- ts(temp_bounded_resp_df$SE_Aus_anomaly_co, 
+               start = as.Date(min(temp_bounded_resp_df$time)), frequency = 52)
+
+plot.ts(tempNEaus_ts)
+plot.ts(tempSEaus_ts)
 
 #variance by week
 aus_var <- as.data.frame(matrix(ncol = 3) )
@@ -299,14 +331,16 @@ var_select <- VARselect(NE_aus_zoo, lag.max = 52, type = "both")
 aic <- var_select$criteria[1,]
 bic <- var_select$criteria[3,]
 
-aic_test <- c()
+aic_test <- rep(NA, 10)
 for (i in 1:10) {
   NE_temp <- vars::VAR(NE_aus_zoo, p = i, type = "both")
   NE_aus_temp <- NE_temp$varresult$NE_AUS
-  print(AIC(NE_aus_temp, k =2))
+  aic_test[i] <- AIC(NE_aus_temp, k = i + 2)
 }
 
-NE_model <- vars::VAR(NE_aus_zoo, p = 3, type = "both")
+plot(1:10, aic_test, type = "l", xlab = "p", ylab = "AIC", main = "NE Aus VAR(p)")
+
+NE_model <- vars::VAR(NE_aus_zoo, p = 4, type = "both")
 
 NE_aus_model <- NE_model$varresult$NE_AUS
 
@@ -317,13 +351,50 @@ summary(NE_model$varresult$NE_AUS)
 #change var names and titles below
 residuals_var <- residuals(NE_model)
 
-# Plot ACF and PACF for the first variable's residuals
-Acf(residuals_var[,1], main="ACF of Residuals for Variable 1")
-Pacf(residuals_var[,1], main="PACF of Residuals for Variable 1")
+# Plot ACF and PACF for the first variable's residualsindices 
+acf(residuals_var[,1], main="ACF of Residuals for NE Aus")
+Pacf(residuals_var[,1], main="PACF of Residuals for NE Aus")
+
+ccf(residuals_var[, 1], residuals_var[, 2], lag.max = 15, main = "Partial CCF Between Residuals of Series 1 and 2")
+ccf(residuals_var[, 1], residuals_var[, 3], lag.max = 15, main = "Partial CCF Between Residuals of Series 1 and 3")
+ccf(residuals_var[, 1], residuals_var[, 4], lag.max = 15, main = "Partial CCF Between Residuals of Series 1 and 4")
+ccf(residuals_var[, 1], residuals_var[, 5], lag.max = 15, main = "Partial CCF Between Residuals of Series 1 and 5")
 
 plot(1:52, aic, type = "l", xlab = "lag")
 plot(1:52, bic, type = "l", xlab = "lag")
 ```
+
+```{r quick_varma}
+model <- define.model(kvar=5, ar=c(1), ma=c(1,4))
+
+arp <- model$ar.pattern; map = model$ma.pattern
+neaus.d <- resid(detr <- lm(detr <- lm(NEaus_ts ~ time(NEaus_ts)), na.action=NULL))
+xdata <- matrix(cbind(neaus.d, nino_ts, dmi_ts, tsa_ts, aao_ts), ncol=5) # strip ts attributes
+fit <- marima(xdata, ar.pattern=arp, ma.pattern=map, penalty=2)
+# resid analysis (not displayed)
+innov <- t(resid(fit))
+
+plot.ts(innov[,1])
+lines(resid_NE, lwd = 0.75, col = "red", lty = 2)
+
+acf(innov, na.action=na.pass)
+pred <- ts(t(fitted(fit))[,1], start=start(NEaus_ts), 
+           freq=frequency(NEaus_ts)) + detr$coef[1] + detr$coef[2]*time(NEaus_ts)
+plot(pred, lwd = 2, col = "blue")
+lines(pred_NE, lwd = 2, col = "red")
+#lines(NEaus_ts)
+points(NEaus_ts, pch = 16, cex  = 0.5)
+
+residuals_var <- resid(fit)
+residuals_var <- residuals_var[,-1]
+# Plot ACF and PACF for the first variable's residuals
+Acf(residuals_var[,1], main="ACF of Residuals for NE Aus")
+Pacf(residuals_var[,1], main="PACF of Residuals for NE Aus")
+
+fit$penalty
+fit$ma.estimates
+```
+
 
 ```{r SE_aus_VAR}
 se_aus_df <- bounded_resp_df[ ,c(2,4,5,6)]
@@ -333,11 +404,125 @@ max_resp <- max(nino_df$time)
 
 se_aus_df <- se_aus_df[se_aus_df$time <= max_resp, ]
 
-#TODO: finish this
+min_date <- as.Date(min(nino_df$time))
+
+#create a df and ts-object
+dates <- se_aus_df$time
+SE_aus_tsdf <- data.frame(Date = dates, SE_AUS = se_aus_df$SE_Aus_anomaly_co,
+                          Nino = nino_df$nino.anomaly,
+                          dmi = dmi_df$dmi.anomaly,
+                          tsa = tsa_df$tsa.anomaly,
+                          aao = aao_df$aao.anomaly)
+
+SE_aus_zoo <- zoo(SE_aus_tsdf[, -1], order.by = SE_aus_tsdf$Date)
+
+rm(max_resp, min_date)
+```
+
+```{r se_var}
+var_select <- VARselect(SE_aus_zoo, lag.max = 52, type = "both")
+
+aic_test <- rep(NA, 10)
+for (i in 1:10) {
+  SE_temp <- vars::VAR(SE_aus_zoo, p = i, type = "both")
+  SE_aus_temp <- SE_temp$varresult$SE_AUS
+  aic_test[i] <- AIC(SE_aus_temp, k = i + 2)
+}
+
+plot(1:10, aic_test, type = "l", xlab = "p", ylab = "AIC", main = "SE Aus VAR(p)")
+
+SE_model <- vars::VAR(SE_aus_zoo, p = 4, type = "both")
+
+SE_aus_model <- SE_model$varresult$SE_AUS
+
+AIC(SE_aus_model, k =2)
+
+summary(SE_model$varresult$SE_AUS)
+
+#change var names and titles below
+residuals_var <- residuals(SE_model)
+
+# Plot ACF and PACF for the first variable's residuals
+acf(residuals_var[,1], main="ACF of Residuals for SE Aus")
+pacf(residuals_var[,1], main="PACF of Residuals for SE Aus")
+
+```
+
+```{r subset_selection}
+#NE aus
+NE_aus_model <- NE_model$varresult$NE_AUS
+
+summary_neVAR <- summary(NE_aus_model)
+coeffs<- summary_neVAR$coefficients 
+
+#threshold:
+s <- 1.5
+sig_varsNE <- rownames(coeffs)[abs(coeffs[, "t value"]) > s]
+sig_varsNE
+
+#SE aus
+SE_aus_model <- SE_model$varresult$SE_AUS
+
+summary_seVAR <- summary(SE_aus_model)
+coeffs<- summary_seVAR$coefficients 
+
+#threshold:
+s <- 1.5
+sig_varsSE <- rownames(coeffs)[abs(coeffs[, "t value"]) > s]
+sig_varsSE
+
 ```
 
 
-## a. Transformed Data
+## a. Plot VAR Models
+
+```{r NEAUS_plot}
+#NE aus 
+
+NEaus_ts <- ts(bounded_resp_df$NE_Aus_anomaly_co, start = as.Date(min(bounded_resp_df$time)), frequency = 52)
+detr <- lm(NEaus_ts ~ time(NEaus_ts))
+#t(fitted(NE_aus_model))
+test_fit <- fitted(NE_aus_model)
+  
+pred_NE <- ts(fitted(NE_aus_model), start = start(NEaus_ts), freq = frequency(NEaus_ts))
+#+ detr$coef[1] + detr$coef[2]*time(NEaus_ts)
+
+#TODO: fix this plot including ylim and x-val as time.
+plot.ts(pred_NE, lwd = 2, col = "blue", ylab = "Anomaly CO", main = "NE Aus Fitted")
+#lines(NEaus_ts, lwd = 1, lty = 3)
+points(NEaus_ts, pch = 16, cex  = 0.5)
+
+resid_NE <- resid(NE_aus_model)
+#resid_NE < NE_aus_model$residuals
+plot(resid_NE, pch = 16, ylab = "Residuals", main = "NE Aus Residuals", xlab = "Time")
+
+hist(resid_NE, breaks = 12, col = 'steelblue', 
+     main = "NE Aus Residuals",  xlab = "Residuals") 
+```
+
+```{r}
+
+SEaus_ts <- ts(bounded_resp_df$SE_Aus_anomaly_co, start = as.Date(min(bounded_resp_df$time)), frequency = 52)
+detr <- lm(SEaus_ts ~ time(SEaus_ts))
+#t(fitted(NE_aus_model))
+test_fit <- fitted(SE_aus_model)
+  
+pred_se <- ts(fitted(SE_aus_model), start = start(SEaus_ts), freq = frequency(SEaus_ts))
+#+ detr$coef[1] + detr$coef[2]*time(SEaus_ts)
+
+#TODO: fix this plot including ylim and x-val as time.
+plot(pred_se, lwd = 2, col = "blue", ylab = "Anomaly CO", main = "SE Aus Fitted")
+#lines(SEaus_ts)
+points(SEaus_ts, pch = 16, cex  = 0.5)
+
+resid_SE <- resid(SE_aus_model)
+plot(resid_SE, pch = 16, ylab = "Residuals", main = "SE Aus Residuals", xlab = "Time")
+
+hist(resid_SE, breaks = 12, col = 'steelblue', 
+     main = "SE Aus Residuals",  xlab = "Residuals") 
+```
+
+
 
 # 2. Seasonal Model 
 
@@ -484,9 +669,125 @@ var_latemid <- vars::VAR(NE_aus_lateMid_zoo, p = 2, type = "both")
 summary(var_latemid$varresult$NE_LateMid)
 ```
 
-# 3. Model Validations 
+# 3. Transformed VAR
+
+Transformed using Box-Cox
+
+Use transformed data for a VAR model to see if it looks any better.
+
+```{r trans_data}
+#NE_aus
+NE_aus_tsdf$NE_AUS <- temp_bounded_resp_df$NE_Aus_anomaly_co
+
+NE_aus_zoo <- zoo(NE_aus_tsdf[, -1], order.by = NE_aus_tsdf$Date)
+
+for (i in 1:10) {
+  NE_temp <- vars::VAR(NE_aus_zoo, p = i, type = "both")
+  NE_aus_temp <- NE_temp$varresult$NE_AUS
+  print(AIC(NE_aus_temp, k =2))
+}
+
+NE_model <- vars::VAR(NE_aus_zoo, p = 4, type = "both")
+
+NE_aus_model <- NE_model$varresult$NE_AUS
+
+AIC(NE_aus_model, k =2)
+
+summary(NE_model$varresult$NE_AUS)
+
+#change var names and titles below
+residuals_var <- residuals(NE_model)
+
+# Plot ACF and PACF for the first variable's residuals
+Acf(residuals_var[,1], main="ACF of Residuals for NE Aus")
+Pacf(residuals_var[,1], main="PACF of Residuals for NE Aus")
+
+#SE Aus
+SE_aus_tsdf$SE_AUS <- temp_bounded_resp_df$SE_Aus_anomaly_co
+
+SE_aus_zoo <- zoo(SE_aus_tsdf[, -1], order.by = SE_aus_tsdf$Date)
 
 
+for (i in 1:10) {
+  SE_temp <- vars::VAR(SE_aus_zoo, p = i, type = "both")
+  SE_aus_temp <- SE_temp$varresult$SE_AUS
+  #print(i)
+  print(AIC(SE_aus_temp, k =2))
+}
+
+SE_model <- vars::VAR(SE_aus_zoo, p = 4, type = "both")
+
+SE_aus_model <- SE_model$varresult$SE_AUS
+
+AIC(SE_aus_model, k =2)
+
+summary(SE_model$varresult$SE_AUS)
+
+#change var names and titles below
+residuals_var <- residuals(SE_model)
+
+# Plot ACF and PACF for the first variable's residuals
+Acf(residuals_var[,1], main="ACF of Residuals for SE Aus")
+Pacf(residuals_var[,1], main="PACF of Residuals for SE Aus")
+
+```
+
+```{r subset_transformed}
+#NE Aus
+summary_neVAR <- summary(NE_aus_model)
+coeffs<- summary_neVAR$coefficients 
+
+#threshold:
+s <- 1.5
+sig_varsNE <- rownames(coeffs)[abs(coeffs[, "t value"]) > s]
+sig_varsNE
+
+#SE aus
+summary_seVAR <- summary(SE_aus_model)
+coeffs<- summary_seVAR$coefficients 
+
+#threshold:
+s <- 1.5
+sig_varsSE <- rownames(coeffs)[abs(coeffs[, "t value"]) > s]
+sig_varsSE
+```
+
+
+# 4. VARMA models
+
+```{r sEaus}
+#residuals have a spike at lag 13 
+
+#test adding ma(13)
+
+```
+
+
+```{r test varma}
+library(astsa) #for cmort data set
+
+model <- define.model(kvar=3, ar=c(1), ma=c(1))
+
+arp <- model$ar.pattern; map = model$ma.pattern
+cmort.d <- resid(detr <- lm(cmort~ time(cmort), na.action=NULL))
+xdata <- matrix(cbind(cmort.d, tempr, part), ncol=3) # strip ts attributes
+fit <- marima(xdata, ar.pattern=arp, ma.pattern=map, means=c(0,1,1), penalty=1)
+# resid analysis (not displayed)
+innov <- t(resid(fit)); plot.ts(innov); acf(innov, na.action=na.pass)
+
+# fitted values for cmort
+pred <- ts(t(fitted(fit))[,1], start=start(cmort), freq=frequency(cmort)) + detr$coef[1] + detr$coef[2]*time(cmort)
+plot(pred, ylab="Cardiovascular Mortality", lwd=2, col=4); points(cmort)
+```
+
+
+# 5. Model Validations 
+
+
+
+
+
+---------------------------------------------
 In the below test block we are going to test our VAR model with AIC/BIC but only for predicting the seasonal data.
 (and testing of our VARMA model (via library MTS))
 
