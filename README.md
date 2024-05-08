@@ -1,1 +1,1 @@
-# TimeSeries_FinalProject_AusWildfire
+# Time Series Final Project Australian Wildfire
