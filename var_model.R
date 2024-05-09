@@ -273,14 +273,13 @@ plot(pred_se, lwd = 2, col = "blue", ylab = "Anomaly CO", main = "SE Aus Fitted"
 #lines(SEaus_ts)
 points(SEaus_ts, pch = 16, cex  = 0.5)
 
-fit.pr <- predict(SE_model, n.ahead = 4, ci = 0.95) # 4 weeks ahead
-fanchart(fit.pr)
 
 resid_SE <- resid(SE_aus_model)
 plot(resid_SE, pch = 16, ylab = "Residuals", main = "SE Aus Residuals", xlab = "Time")
 
 hist(resid_SE, breaks = 12, col = 'steelblue', 
      main = "SE Aus Residuals",  xlab = "Residuals") 
+
 
 ##-----------Additional Work-----------------##
 
